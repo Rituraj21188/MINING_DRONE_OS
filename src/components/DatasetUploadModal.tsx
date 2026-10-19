@@ -19,6 +19,7 @@ interface DatasetUploadModalProps {
   onClose: () => void;
   onAddFeatures: (features: VectorFeature[]) => void;
   onSelectSite: (siteId: string) => void;
+  onUploadOrtho: (url: string, fileName: string) => void;
   theme: 'dark' | 'light';
 }
 
@@ -27,6 +28,7 @@ export const DatasetUploadModal: React.FC<DatasetUploadModalProps> = ({
   onClose,
   onAddFeatures,
   onSelectSite,
+  onUploadOrtho,
   theme
 }) => {
   const isDark = theme === 'dark';
@@ -50,7 +52,13 @@ export const DatasetUploadModal: React.FC<DatasetUploadModalProps> = ({
 
     await new Promise((r) => setTimeout(r, 600));
     setUploadProgress(80);
-    setUploadStatusText('Reprojecting coordinates to UTM 46N (EPSG:32646)...');
+    setUploadStatusText('Georeferencing orthomosaic raster to Google Hybrid Satellite...');
+
+    // If file is an image (PNG, JPG, TIFF, WEBP), create real object URL for Leaflet ImageOverlay
+    if (file.type.startsWith('image/') || file.name.match(/\.(tif|tiff|png|jpe?g|webp)$/i)) {
+      const objectUrl = URL.createObjectURL(file);
+      onUploadOrtho(objectUrl, file.name);
+    }
 
     if (file.name.endsWith('.geojson') || file.name.endsWith('.json')) {
       try {

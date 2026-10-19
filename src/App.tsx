@@ -15,6 +15,7 @@ import { GoogleDriveModal } from './components/GoogleDriveModal';
 import { ExportModal } from './components/ExportModal';
 import { DatasetUploadModal } from './components/DatasetUploadModal';
 import { ElevationProfileModal } from './components/ElevationProfileModal';
+import { StreamlitHubModal } from './components/StreamlitHubModal';
 import { exportToCSV, downloadFile } from './utils/exporters';
 
 export default function App() {
@@ -79,6 +80,11 @@ export default function App() {
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
+  const [isStreamlitModalOpen, setIsStreamlitModalOpen] = useState<boolean>(false);
+
+  // Uploaded georeferenced orthomosaic
+  const [uploadedOrthoUrl, setUploadedOrthoUrl] = useState<string | null>(null);
+  const [uploadedOrthoName, setUploadedOrthoName] = useState<string | null>(null);
 
   // Computed KPIs
   const totalAreaHa = features.reduce((acc, f) => acc + (f.areaHa || 0), 0);
@@ -124,6 +130,7 @@ export default function App() {
         onOpenDriveModal={() => setIsDriveModalOpen(true)}
         onOpenExportModal={() => setIsExportModalOpen(true)}
         onOpenUploadModal={() => setIsUploadModalOpen(true)}
+        onOpenStreamlitModal={() => setIsStreamlitModalOpen(true)}
         featuresCount={features.length}
       />
 
@@ -172,7 +179,7 @@ export default function App() {
             onGenerateElevationProfile={() => setIsProfileModalOpen(true)}
           />
 
-          {/* High-Performance Canvas */}
+          {/* High-Performance Leaflet Google Hybrid Satellite Canvas */}
           <div className="flex-1 flex flex-col relative h-[calc(100vh-80px)] overflow-hidden">
             <MiningCanvas
               activeModule={activeModule}
@@ -189,6 +196,8 @@ export default function App() {
               onUpdateCoords={setCoords}
               selectedSite={selectedSite}
               theme={theme}
+              uploadedOrthoUrl={uploadedOrthoUrl}
+              uploadedOrthoName={uploadedOrthoName}
             />
 
             {/* QGIS-Style Dockable Attribute Table */}
@@ -236,6 +245,10 @@ export default function App() {
             setFeatures(s.features);
           }
         }}
+        onUploadOrtho={(url, name) => {
+          setUploadedOrthoUrl(url);
+          setUploadedOrthoName(name);
+        }}
         theme={theme}
       />
 
@@ -245,6 +258,13 @@ export default function App() {
         onClose={() => setIsProfileModalOpen(false)}
         site={selectedSite}
         contourConfig={contourConfig}
+        theme={theme}
+      />
+
+      {/* Streamlit Python Native Engine Modal */}
+      <StreamlitHubModal
+        isOpen={isStreamlitModalOpen}
+        onClose={() => setIsStreamlitModalOpen(false)}
         theme={theme}
       />
     </div>

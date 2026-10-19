@@ -1,0 +1,14 @@
+[server]
+port = 8501
+enableCORS = false
+enableXsrfProtection = false
+maxUploadSize = 1024
+maxMessageSize = 1024
+
+[theme]
+base = "dark"
+primaryColor = "#c6ff00"
+backgroundColor = "#0b0f0c"
+secondaryBackgroundColor = "#121914"
+textColor = "#e8f0e8"
+font = "monospace"

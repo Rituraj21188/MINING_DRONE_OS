@@ -18,6 +18,8 @@ export interface VectorVertex {
   easting: number;
   northing: number;
   elevation: number;
+  lat?: number;
+  lng?: number;
 }
 
 export interface VectorFeature {
@@ -58,6 +60,9 @@ export interface MiningSite {
   baseNorthing: number;
   minElevation: number;
   maxElevation: number;
+  centerLat: number;
+  centerLng: number;
+  bounds: [[number, number], [number, number]]; // [[South, West], [North, East]]
   orthoUrl: string;
   features: VectorFeature[];
 }

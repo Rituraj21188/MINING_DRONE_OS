@@ -26,6 +26,7 @@ interface TopBarProps {
   onOpenDriveModal: () => void;
   onOpenExportModal: () => void;
   onOpenUploadModal: () => void;
+  onOpenStreamlitModal: () => void;
   featuresCount: number;
 }
 
@@ -38,6 +39,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenDriveModal,
   onOpenExportModal,
   onOpenUploadModal,
+  onOpenStreamlitModal,
   featuresCount
 }) => {
   const isDark = theme === 'dark';
@@ -206,6 +208,20 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Action Controls: 1GB Upload, Google Drive, Export, Theme */}
         <div className="flex items-center space-x-2">
+          {/* Streamlit Python Engine */}
+          <button
+            onClick={onOpenStreamlitModal}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono-tech border transition-all ${
+              isDark
+                ? 'bg-[#1e1315] hover:bg-[#281a1d] border-[#441f25] text-[#ff4b4b]'
+                : 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+            }`}
+            title="Streamlit Python Engine & 1024MB Setup"
+          >
+            <div className="w-2.5 h-2.5 rounded-full bg-[#ff4b4b] animate-pulse"></div>
+            <span className="font-bold">STREAMLIT</span>
+          </button>
+
           {/* 1GB Upload */}
           <button
             onClick={onOpenUploadModal}
