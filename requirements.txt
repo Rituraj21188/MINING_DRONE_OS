@@ -1,0 +1,11 @@
+streamlit
+folium
+streamlit-folium
+rasterio
+shapely
+pyproj
+geopandas
+numpy
+pandas
+Pillow
+laspy[lazrs]
