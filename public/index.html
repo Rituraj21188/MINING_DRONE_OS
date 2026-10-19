@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MINING_DRONE_OS v2.5 - Unified Web-GIS &amp; Drone Operations</title>
+  <meta name="description" content="Unified Web-GIS and drone operations platform for mining: split-surface viewer (Ortho, DSM, DTM), contour elevation modeling, live shapefile digitization, 1GB upload, and Google Drive & DXF/KML/GeoJSON export." />
+  
+  <!-- Google Fonts: JetBrains Mono & Plus Jakarta Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+
+  <!-- Leaflet Core CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <!-- Leaflet Draw CSS -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+
+  <!-- Application CSS -->
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app-container">
+
+    <!-- TOP TELEMETRY RIBBON -->
+    <header id="top-bar">
+      <div class="brand-section">
+        <div class="brand-logo">
+          <i class="fa-solid fa-satellite-dish pulse-icon"></i>
+        </div>
+        <div class="brand-text">
+          <div class="title-row">
+            <span class="brand-name">MINING_DRONE_OS</span>
+            <span class="version-tag">v2.5 PRO</span>
+          </div>
+          <div class="sub-row">Unified Web-GIS &amp; UAV Survey Core</div>
+        </div>
+      </div>
+
+      <!-- Center Site Selector & Live Telemetry -->
+      <div class="site-telemetry-section">
+        <div class="site-selector-box">
+          <label for="site-select"><i class="fa-solid fa-mountain-city"></i> SURVEY SITE:</label>
+          <select id="site-select">
+            <option value="pit_04" selected>Pit 04 North Bench Quarry (UTM 19S)</option>
+            <option value="cerro_verde">Cerro Verde Copper Pit (UTM 19S)</option>
+            <option value="bingham_canyon">Bingham Canyon Mine (UTM 12N)</option>
+          </select>
+        </div>
+
+        <div class="telemetry-readouts">
+          <div class="tele-item" title="Real-time Coordinates at Cursor">
+            <span class="tele-label">POS:</span>
+            <span class="tele-val highlight-cyan" id="cursor-coords">E 512,884 &bull; N 4,687,201</span>
+          </div>
+          <div class="tele-item" title="Instantaneous Elevation (Z) at Cursor">
+            <span class="tele-label">ELEV (Z):</span>
+            <span class="tele-val highlight-lime" id="cursor-elevation">2,460.0 m</span>
+          </div>
+          <div class="tele-item" title="UAV Flight Ground Sampling Distance">
+            <span class="tele-label">GSD:</span>
+            <span class="tele-val" id="tele-gsd">2.8 cm/px</span>
+          </div>
+          <div class="tele-item" title="RTK GNSS Positioning Status">
+            <span class="status-indicator online"></span>
+            <span class="tele-val" id="tele-rtk">RTK FIXED</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="top-actions">
+        <button id="btn-open-3d" class="btn btn-secondary" title="View 3D Pit Topography">
+          <i class="fa-solid fa-cube"></i> <span>3D MESH</span>
+        </button>
+        <button id="btn-open-upload" class="btn btn-secondary" title="Upload GeoTIFF, Shapefile, CSV">
+          <i class="fa-solid fa-cloud-arrow-up"></i> <span>UPLOAD 1GB</span>
+        </button>
+        <button id="btn-open-export" class="btn btn-secondary" title="Export CAD, KML, GeoJSON">
+          <i class="fa-solid fa-file-export"></i> <span>EXPORT</span>
+        </button>
+        <button id="btn-client-report" class="btn btn-primary" title="Generate Executive Survey PDF Audit">
+          <i class="fa-solid fa-file-pdf"></i> <span>CLIENT REPORT</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- OPERATIONAL MODULE SWITCHER -->
+    <nav id="module-bar">
+      <div class="module-tabs">
+        <button class="mod-tab active" data-module="split_viewer">
+          <i class="fa-solid fa-table-columns"></i>
+          <span>01. Split-Surface Comparison</span>
+        </button>
+        <button class="mod-tab" data-module="elevation_contours">
+          <i class="fa-solid fa-layer-group"></i>
+          <span>02. Elevation &amp; Contours</span>
+        </button>
+        <button class="mod-tab" data-module="vector_digitizer">
+          <i class="fa-solid fa-draw-polygon"></i>
+          <span>03. Live .shp Digitization</span>
+        </button>
+        <button class="mod-tab" data-module="stockpile_volumetrics">
+          <i class="fa-solid fa-calculator"></i>
+          <span>04. Stockpile Volumetrics</span>
+        </button>
+        <button class="mod-tab" data-module="client_deliverables">
+          <i class="fa-solid fa-briefcase"></i>
+          <span>05. Client Deliverables</span>
+        </button>
+      </div>
+      <div class="module-quick-status">
+        <span id="active-crs-badge"><i class="fa-solid fa-globe"></i> EPSG:32719</span>
+        <span class="separator">|</span>
+        <span id="active-features-count"><i class="fa-solid fa-shapes"></i> 5 Vector Assets</span>
+      </div>
+    </nav>
+
+    <!-- MAIN WORKSPACE -->
+    <main id="workspace">
+
+      <!-- LEFT SIDEBAR: CONTEXTUAL TOOL PANEL -->
+      <aside id="sidebar-tools">
+        
+        <!-- PANEL 01: SPLIT VIEWER CONTROLS -->
+        <div class="tool-panel active" id="panel-split_viewer">
+          <div class="panel-header">
+            <h3><i class="fa-solid fa-table-columns"></i> Split-Surface Viewer</h3>
+            <span class="panel-sub">Dual-Curtain Raster Comparison</span>
+          </div>
+          
+          <div class="control-group">
+            <label>Comparison Mode</label>
+            <div class="radio-pill-group">
+              <label class="radio-pill">
+                <input type="radio" name="split_mode" value="curtain" checked />
+                <span>Curtain Swipe</span>
+              </label>
+              <label class="radio-pill">
+                <input type="radio" name="split_mode" value="fade" />
+                <span>Opacity Blend</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <label for="split-layer-left">Left Surface (Baseline)</label>
+            <select id="split-layer-left" class="form-select">
+              <option value="ortho" selected>UAV True-Color Orthomosaic (2.8cm)</option>
+              <option value="satellite">Google Hybrid Satellite Base</option>
+              <option value="baseline">Pre-Blast Survey (Baseline)</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="split-layer-right">Right Surface (Analysis)</label>
+            <select id="split-layer-right" class="form-select">
+              <option value="dsm" selected>Digital Surface Model (DSM Hypsometric)</option>
+              <option value="dtm">Digital Terrain Model (DTM Hillshade)</option>
+              <option value="contours">Elevation Contours Only (5m)</option>
+              <option value="satellite">Esri World Imagery</option>
+            </select>
+          </div>
+
+          <div class="control-group" id="curtain-slider-container">
+            <div class="slider-header">
+              <label>Curtain Divider Position</label>
+              <span id="split-pos-val">50%</span>
+            </div>
+            <input type="range" id="split-slider" min="0" max="100" value="50" class="form-slider" />
+            <div class="slider-hints">
+              <span>Left Layer</span>
+              <span>Right Layer</span>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <div class="slider-header">
+              <label>Orthomosaic Layer Opacity</label>
+              <span id="ortho-opacity-val">85%</span>
+            </div>
+            <input type="range" id="ortho-opacity" min="0" max="100" value="85" class="form-slider" />
+          </div>
+
+          <div class="info-card">
+            <div class="info-icon"><i class="fa-solid fa-lightbulb"></i></div>
+            <div class="info-text">
+              Drag the divider on the map canvas or use the slider above to inspect bench excavation progress against baseline models.
+            </div>
+          </div>
+        </div>
+
+        <!-- PANEL 02: ELEVATION & CONTOURS -->
+        <div class="tool-panel" id="panel-elevation_contours">
+          <div class="panel-header">
+            <h3><i class="fa-solid fa-layer-group"></i> Elevation &amp; Contours</h3>
+            <span class="panel-sub">Hypsometric Modeling &amp; Transects</span>
+          </div>
+
+          <div class="control-group">
+            <label for="contour-interval">Contour Interval</label>
+            <select id="contour-interval" class="form-select">
+              <option value="1">1 Meter (Ultra Fine Mining Grade)</option>
+              <option value="2">2 Meters (Bench Step Grade)</option>
+              <option value="5" selected>5 Meters (Standard Engineering)</option>
+              <option value="10">10 Meters (Regional Pit Overview)</option>
+              <option value="25">25 Meters (Macro Topo)</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label>DEM Color Palette</label>
+            <div class="palette-selector">
+              <button class="palette-btn active" data-palette="turbo" title="Turbo Rainbow">
+                <span class="color-bar turbo-gradient"></span> Turbo
+              </button>
+              <button class="palette-btn" data-palette="terrain" title="Mining Hypsometric">
+                <span class="color-bar terrain-gradient"></span> Terrain
+              </button>
+              <button class="palette-btn" data-palette="magma" title="Magma Thermal">
+                <span class="color-bar magma-gradient"></span> Magma
+              </button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <label>Cross-Section Transect Tool</label>
+            <button id="btn-draw-transect" class="btn btn-outline w-100">
+              <i class="fa-solid fa-chart-area"></i> Draw Pit Cross-Section
+            </button>
+            <div class="hint-text mt-1">Click 2+ points across pit to generate cross-sectional elevation profile.</div>
+          </div>
+
+          <div class="control-group">
+            <label>Elevation Legend</label>
+            <div class="elev-legend-card">
+              <div class="elev-legend-scale"></div>
+              <div class="elev-legend-labels">
+                <span id="legend-max-z">2,495 m (Rim)</span>
+                <span id="legend-mid-z">2,312 m</span>
+                <span id="legend-min-z">2,130 m (Sump)</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <button id="btn-toggle-profile-panel" class="btn btn-secondary w-100">
+              <i class="fa-solid fa-chart-line"></i> View Elevation Profile Graph
+            </button>
+          </div>
+        </div>
+
+        <!-- PANEL 03: LIVE DIGITIZER -->
+        <div class="tool-panel" id="panel-vector_digitizer">
+          <div class="panel-header">
+            <h3><i class="fa-solid fa-draw-polygon"></i> Live Vector Digitizer</h3>
+            <span class="panel-sub">CAD &amp; GIS Mining Asset Capture</span>
+          </div>
+
+          <div class="digitizer-tools-grid">
+            <button class="digi-tool-btn" data-tool="crest" title="Digitize Pit Crest (Rim)">
+              <i class="fa-solid fa-mountain" style="color: #c6ff00;"></i>
+              <span>Pit Crest</span>
+            </button>
+            <button class="digi-tool-btn" data-tool="toe" title="Digitize Pit Toe (Bench Bottom)">
+              <i class="fa-solid fa-stairs" style="color: #00e5ff;"></i>
+              <span>Pit Toe</span>
+            </button>
+            <button class="digi-tool-btn" data-tool="road" title="Digitize Haul Road Centerline">
+              <i class="fa-solid fa-road" style="color: #fbc02d;"></i>
+              <span>Haul Road</span>
+            </button>
+            <button class="digi-tool-btn" data-tool="stockpile" title="Digitize Stockpile Perimeter">
+              <i class="fa-solid fa-cubes-stacked" style="color: #ff9100;"></i>
+              <span>Stockpile</span>
+            </button>
+            <button class="digi-tool-btn" data-tool="blast" title="Digitize Blast Block">
+              <i class="fa-solid fa-burst" style="color: #e040fb;"></i>
+              <span>Blast Block</span>
+            </button>
+            <button class="digi-tool-btn" data-tool="borehole" title="Add GCP / Borehole Point">
+              <i class="fa-solid fa-location-crosshairs" style="color: #ff5252;"></i>
+              <span>Borehole</span>
+            </button>
+          </div>
+
+          <div class="control-group mt-3">
+            <div class="section-title-sm">ACTIVE DIGITIZED ASSETS</div>
+            <div id="vector-features-list" class="features-scroll-list">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <div class="btn-group-row mt-2">
+            <button id="btn-clear-vectors" class="btn btn-outline-danger btn-sm">Clear All</button>
+            <button id="btn-export-dxf-quick" class="btn btn-outline btn-sm"><i class="fa-solid fa-file-code"></i> DXF</button>
+            <button id="btn-export-kml-quick" class="btn btn-outline btn-sm"><i class="fa-solid fa-globe"></i> KML</button>
+          </div>
+        </div>
+
+        <!-- PANEL 04: STOCKPILE VOLUMETRICS -->
+        <div class="tool-panel" id="panel-stockpile_volumetrics">
+          <div class="panel-header">
+            <h3><i class="fa-solid fa-calculator"></i> Stockpile Volumetrics</h3>
+            <span class="panel-sub">Cut &amp; Fill Tonnage Computation</span>
+          </div>
+
+          <div class="control-group">
+            <label for="stockpile-select">Select Target Stockpile</label>
+            <select id="stockpile-select" class="form-select">
+              <option value="stockpile_a" selected>Stockpile Alpha - High Grade Cu Ore</option>
+              <option value="stockpile_b">Stockpile Beta - Crushed Aggregate</option>
+              <option value="custom">Draw New Custom Stockpile...</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="material-type">Material Preset &amp; Density</label>
+            <select id="material-type" class="form-select">
+              <option value="2.70" selected>Copper Porphyry Ore (2.70 t/m³)</option>
+              <option value="2.65">Run of Mine Waste Rock (2.65 t/m³)</option>
+              <option value="1.65">Crushed Aggregates (1.65 t/m³)</option>
+              <option value="3.20">Iron Ore Hematite (3.20 t/m³)</option>
+              <option value="1.30">Thermal / Coking Coal (1.30 t/m³)</option>
+              <option value="custom">Custom Density Input...</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label>Base Reference Surface</label>
+            <div class="radio-pill-group">
+              <label class="radio-pill">
+                <input type="radio" name="base_mode" value="min" checked />
+                <span>Min Rim RL</span>
+              </label>
+              <label class="radio-pill">
+                <input type="radio" name="base_mode" value="mean" />
+                <span>Mean Rim</span>
+              </label>
+              <label class="radio-pill">
+                <input type="radio" name="base_mode" value="datum" />
+                <span>Fixed Datum</span>
+              </label>
+            </div>
+          </div>
+
+          <button id="btn-run-volumetrics" class="btn btn-primary w-100">
+            <i class="fa-solid fa-microchip"></i> CALCULATE VOLUME &amp; TONNAGE
+          </button>
+
+          <!-- Computed Volumetric Output Card -->
+          <div id="volume-result-card" class="result-card mt-3">
+            <div class="result-header">
+              <span class="result-title" id="vol-res-name">Stockpile Alpha</span>
+              <span class="badge badge-success">COMPUTED</span>
+            </div>
+
+            <div class="metric-row">
+              <div class="metric-block">
+                <div class="metric-lbl">TOTAL HEAP VOLUME</div>
+                <div class="metric-val text-lime" id="vol-res-heap">248,500 <span class="unit">m³</span></div>
+              </div>
+              <div class="metric-block">
+                <div class="metric-lbl">ESTIMATED TONNAGE</div>
+                <div class="metric-val text-amber" id="vol-res-tonnage">670,950 <span class="unit">t</span></div>
+              </div>
+            </div>
+
+            <div class="metric-row mt-2">
+              <div class="metric-block">
+                <div class="metric-lbl">SURFACE FOOTPRINT</div>
+                <div class="metric-val" id="vol-res-area">2.85 <span class="unit">ha</span></div>
+              </div>
+              <div class="metric-block">
+                <div class="metric-lbl">MAX PILE HEIGHT</div>
+                <div class="metric-val" id="vol-res-height">34.8 <span class="unit">m</span></div>
+              </div>
+            </div>
+
+            <div class="vol-breakdown mt-2">
+              <div class="breakdown-item">
+                <span>Base Datum Level:</span>
+                <strong id="vol-res-datum">2,460.0 m RL</strong>
+              </div>
+              <div class="breakdown-item">
+                <span>Excavation Cut:</span>
+                <strong id="vol-res-cut">120.0 m³</strong>
+              </div>
+              <div class="breakdown-item">
+                <span>Net Volume:</span>
+                <strong id="vol-res-net">+248,380 m³</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PANEL 05: CLIENT PRESENTATION & DELIVERABLES -->
+        <div class="tool-panel" id="panel-client_deliverables">
+          <div class="panel-header">
+            <h3><i class="fa-solid fa-briefcase"></i> Client Deliverables</h3>
+            <span class="panel-sub">Certified Mining Audit &amp; Handover</span>
+          </div>
+
+          <div class="client-card">
+            <div class="client-badge"><i class="fa-solid fa-stamp"></i> QA/QC VERIFIED</div>
+            <h4 id="report-site-name">Pit 04 North Bench Quarry</h4>
+            <div class="client-meta-list">
+              <div><span>Survey Date:</span> <strong>2026-10-18</strong></div>
+              <div><span>GSD Accuracy:</span> <strong>2.8 cm (Sub-5cm Class)</strong></div>
+              <div><span>Drone Sensor:</span> <strong>Zenmuse P1 45MP Full-Frame</strong></div>
+              <div><span>Mine Status:</span> <strong class="text-lime">Active Commercial Mining</strong></div>
+            </div>
+          </div>
+
+          <div class="deliverables-list mt-3">
+            <div class="section-title-sm">EXPORT DELIVERABLE PACKAGES</div>
+
+            <button class="deliverable-item-btn" id="btn-export-pdf-main">
+              <div class="deliv-icon text-red"><i class="fa-solid fa-file-pdf"></i></div>
+              <div class="deliv-info">
+                <div class="deliv-name">Executive Survey Audit (PDF)</div>
+                <div class="deliv-desc">Sign-off sheet, volumetric tables, site compliance</div>
+              </div>
+              <i class="fa-solid fa-download"></i>
+            </button>
+
+            <button class="deliverable-item-btn" id="btn-export-dxf-main">
+              <div class="deliv-icon text-blue"><i class="fa-solid fa-drafting-compass"></i></div>
+              <div class="deliv-info">
+                <div class="deliv-name">AutoCAD Engineering Model (DXF)</div>
+                <div class="deliv-desc">3D Benches, crests, toes, haul road centerlines</div>
+              </div>
+              <i class="fa-solid fa-download"></i>
+            </button>
+
+            <button class="deliverable-item-btn" id="btn-export-kml-main">
+              <div class="deliv-icon text-green"><i class="fa-solid fa-earth-americas"></i></div>
+              <div class="deliv-info">
+                <div class="deliv-name">Google Earth Presentation (KML)</div>
+                <div class="deliv-desc">3D extruded boundary polygons &amp; stock overlays</div>
+              </div>
+              <i class="fa-solid fa-download"></i>
+            </button>
+
+            <button class="deliverable-item-btn" id="btn-export-geojson-main">
+              <div class="deliv-icon text-amber"><i class="fa-solid fa-code"></i></div>
+              <div class="deliv-info">
+                <div class="deliv-name">GIS Feature Collection (GeoJSON)</div>
+                <div class="deliv-desc">Full attributes, area metrics, coordinates</div>
+              </div>
+              <i class="fa-solid fa-download"></i>
+            </button>
+          </div>
+        </div>
+
+      </aside>
+
+      <!-- CENTER MAP CANVAS -->
+      <section id="map-container">
+        <div id="map"></div>
+
+        <!-- SPLIT-SCREEN ON-CANVAS CURTAIN DIVIDER -->
+        <div id="curtain-divider">
+          <div class="curtain-line"></div>
+          <div class="curtain-handle" title="Drag to compare surfaces">
+            <i class="fa-solid fa-arrows-left-right"></i>
+          </div>
+        </div>
+
+        <!-- FLOATING MAP CONTROLS -->
+        <div class="floating-map-controls">
+          <div class="basemap-selector-pill">
+            <button class="bm-btn active" data-basemap="google_hybrid" title="Google Hybrid Satellite">
+              <i class="fa-solid fa-satellite"></i> Google Hybrid
+            </button>
+            <button class="bm-btn" data-basemap="esri_imagery" title="Esri Satellite">
+              <i class="fa-solid fa-globe"></i> Esri
+            </button>
+            <button class="bm-btn" data-basemap="dark" title="Dark Carto Map">
+              <i class="fa-solid fa-moon"></i> Dark
+            </button>
+          </div>
+
+          <div class="map-overlay-toggles">
+            <label class="toggle-chip active" id="chip-ortho">
+              <input type="checkbox" id="chk-ortho" checked />
+              <span><i class="fa-solid fa-camera"></i> Drone Ortho</span>
+            </label>
+            <label class="toggle-chip active" id="chip-dem">
+              <input type="checkbox" id="chk-dem" checked />
+              <span><i class="fa-solid fa-mountain"></i> DSM Topo</span>
+            </label>
+            <label class="toggle-chip active" id="chip-contours">
+              <input type="checkbox" id="chk-contours" checked />
+              <span><i class="fa-solid fa-water"></i> Contours</span>
+            </label>
+            <label class="toggle-chip active" id="chip-vectors">
+              <input type="checkbox" id="chk-vectors" checked />
+              <span><i class="fa-solid fa-draw-polygon"></i> Vectors</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- MOUSE INSPECTION HOVER BADGE -->
+        <div id="mouse-probe-badge">
+          <div class="probe-val"><i class="fa-solid fa-crosshairs"></i> <span id="probe-z">2,460.0 m</span></div>
+          <div class="probe-coords" id="probe-latlng">-23.864000, -69.142000</div>
+        </div>
+      </section>
+
+      <!-- RIGHT SIDEBAR: SITE TELEMETRY & ATTRIBUTE INSPECTOR -->
+      <aside id="sidebar-telemetry">
+        <div class="telemetry-box">
+          <div class="telemetry-box-header">
+            <h4><i class="fa-solid fa-gauge-high"></i> PIT OPERATIONAL TELEMETRY</h4>
+            <span class="live-dot" title="Live stream"></span>
+          </div>
+
+          <!-- Metric Cards -->
+          <div class="telemetry-card">
+            <div class="card-title">PROJECTED MINE GRID</div>
+            <div class="card-main-val text-cyan" id="pit-utm-display">512,884 E &bull; 4,687,201 N</div>
+            <div class="card-sub-val" id="pit-crs-display">Zone 19S (EPSG:32719)</div>
+          </div>
+
+          <div class="telemetry-card">
+            <div class="card-title">EXCAVATED PIT FOOTPRINT</div>
+            <div class="card-main-val text-lime" id="pit-area-display">142.8 <span class="unit-sm">ha</span></div>
+            <div class="card-sub-val" id="pit-depth-display">Pit Depth: 330 m &bull; 6 Benches</div>
+          </div>
+
+          <div class="telemetry-card">
+            <div class="card-title">TOTAL STOCKPILE VOLUME</div>
+            <div class="card-main-val text-amber" id="pit-stockpile-display">4,850k <span class="unit-sm">m³</span></div>
+            <div class="card-sub-val" id="pit-tonnage-display">Estimated: 12.8M tonnes ore/waste</div>
+          </div>
+
+          <div class="telemetry-card">
+            <div class="card-title">UAV SURVEY ACCURACY</div>
+            <div class="card-main-val text-white">2.8 cm <span class="unit-sm">GSD</span></div>
+            <div class="card-sub-val">Vertical RMSE: &plusmn; 4.2 cm &bull; RTK Fix</div>
+          </div>
+
+          <!-- Feature Inspector -->
+          <div class="feature-inspector-box mt-3">
+            <div class="inspector-header">
+              <h5><i class="fa-solid fa-circle-info"></i> SELECTED FEATURE INSPECTOR</h5>
+            </div>
+            <div id="inspector-content">
+              <div class="empty-state-hint">Click any digitized line, polygon, or stockpile on the map to inspect engineering properties.</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+    </main>
+
+    <!-- BOTTOM DRAWER: ELEVATION CROSS-SECTION PROFILE -->
+    <div id="bottom-profile-drawer" class="collapsed">
+      <div class="drawer-header" id="drawer-toggle-bar">
+        <div class="drawer-title">
+          <i class="fa-solid fa-chart-area"></i>
+          <span>Pit Elevation Cross-Section Transect (A &mdash; B Profile)</span>
+          <span class="badge badge-outline" id="profile-summary-badge">Relief: 330.0 m &bull; Distance: 1,640 m</span>
+        </div>
+        <div class="drawer-actions">
+          <button id="btn-export-profile-csv" class="btn btn-outline btn-xs" title="Export Profile Points CSV">
+            <i class="fa-solid fa-file-csv"></i> CSV
+          </button>
+          <button id="btn-close-drawer" class="btn-icon" title="Toggle Profile Drawer">
+            <i class="fa-solid fa-chevron-up"></i>
+          </button>
+        </div>
+      </div>
+      <div class="drawer-body">
+        <div class="chart-wrapper">
+          <canvas id="elevation-chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- MODAL: 3D PIT TOPOGRAPHIC MESH -->
+  <div class="modal-backdrop" id="modal-3d">
+    <div class="modal-window modal-lg">
+      <div class="modal-header">
+        <div class="modal-title">
+          <i class="fa-solid fa-cube text-lime"></i> 3D Topographic Pit &amp; Bench Surface Visualizer
+        </div>
+        <button class="btn-close-modal" data-close="modal-3d">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="plotly-3d-container">
+          <div class="loading-spinner"><i class="fa-solid fa-spinner fa-spin"></i> Rendering 3D Topographic Mesh...</div>
+        </div>
+        <div class="modal-controls-bar">
+          <span><i class="fa-solid fa-computer-mouse"></i> Left Click: Rotate &bull; Right Click: Pan &bull; Scroll: Zoom</span>
+          <button id="btn-reset-3d-camera" class="btn btn-outline btn-sm">Reset View</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: 1GB DATASET INGESTION -->
+  <div class="modal-backdrop" id="modal-upload">
+    <div class="modal-window">
+      <div class="modal-header">
+        <div class="modal-title">
+          <i class="fa-solid fa-cloud-arrow-up text-cyan"></i> Ingest Mining Drone Dataset (1GB Limit)
+        </div>
+        <button class="btn-close-modal" data-close="modal-upload">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="drop-zone" class="drop-zone">
+          <i class="fa-solid fa-file-zipper drop-icon"></i>
+          <div class="drop-title">Drag &amp; Drop Orthomosaic / GeoTIFF / Vector Shapefile</div>
+          <div class="drop-subtitle">Supported: .tif, .tiff, .geojson, .kml, .dxf, .csv, .zip (Max: 1024 MB)</div>
+          <input type="file" id="file-input" class="hidden-file-input" accept=".tif,.tiff,.geojson,.kml,.dxf,.csv,.zip,.png,.jpg" />
+          <button id="btn-browse-file" class="btn btn-primary mt-2">Browse Local Files</button>
+        </div>
+
+        <div id="upload-status" class="upload-status-box mt-3" style="display: none;">
+          <div class="progress-bar-container">
+            <div id="upload-progress-bar" class="progress-bar-fill"></div>
+          </div>
+          <div id="upload-status-msg" class="upload-status-text">Processing georeferenced raster metadata...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: EXPORT DELIVERABLES -->
+  <div class="modal-backdrop" id="modal-export">
+    <div class="modal-window">
+      <div class="modal-header">
+        <div class="modal-title">
+          <i class="fa-solid fa-file-export text-lime"></i> Export Engineering Deliverables
+        </div>
+        <button class="btn-close-modal" data-close="modal-export">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-options-grid">
+          <div class="export-box">
+            <i class="fa-solid fa-drafting-compass fa-2x text-blue"></i>
+            <h4>AutoCAD DXF (.dxf)</h4>
+            <p>Industry-standard CAD layers with 3D bench polylines, crests, toes, and elevation nodes.</p>
+            <button id="btn-modal-dxf" class="btn btn-primary btn-sm w-100">Download DXF</button>
+          </div>
+          <div class="export-box">
+            <i class="fa-solid fa-earth-americas fa-2x text-green"></i>
+            <h4>Google Earth (.kml)</h4>
+            <p>Full 3D extruded vector polygons, stockpile boundaries, and Placemarks for client review.</p>
+            <button id="btn-modal-kml" class="btn btn-primary btn-sm w-100">Download KML</button>
+          </div>
+          <div class="export-box">
+            <i class="fa-solid fa-code fa-2x text-amber"></i>
+            <h4>GeoJSON (.geojson)</h4>
+            <p>Standard RFC 7946 geospatial format compatible with QGIS, ArcGIS Pro, and MapLibre.</p>
+            <button id="btn-modal-geojson" class="btn btn-primary btn-sm w-100">Download GeoJSON</button>
+          </div>
+          <div class="export-box">
+            <i class="fa-solid fa-file-pdf fa-2x text-red"></i>
+            <h4>Executive PDF Audit</h4>
+            <p>Complete certified survey report with stockpile schedule, QA/QC stamp, and client sign-off.</p>
+            <button id="btn-modal-pdf" class="btn btn-primary btn-sm w-100">Download PDF</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCRIPTS -->
+  <!-- Leaflet Core JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet Draw JS -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <!-- Chart.js for Cross-Section Elevation Profiles -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <!-- Plotly.js for 3D Topographic Mesh -->
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.31.1/plotly.min.js"></script>
+
+  <!-- Application Modules -->
+  <script src="js/elevation.js"></script>
+  <script src="js/digitizer.js"></script>
+  <script src="js/volumetrics.js"></script>
+  <script src="js/viewer3d.js"></script>
+  <script src="js/export.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
