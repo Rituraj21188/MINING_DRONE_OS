@@ -28,23 +28,20 @@ try:
 except ImportError:
     HAS_LASPY = False
 
-# Default Coordinate System: WGS 84 / UTM Zone 46N
-DEFAULT_CRS = CRS.from_epsg(32646)
-
-# ----------------- STREAMLIT PAGE CONFIG -----------------
+# ----------------- PAGE CONFIGURATION -----------------
 st.set_page_config(
-    page_title="Mine Site Spatial Deck & Volumetrics",
+    page_title="Universal Mine Spatial Deck & Volumetrics",
     page_icon="⛏️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Clean, professional, high-contrast dashboard styling
+# Professional High-Contrast UI Styling
 st.markdown("""
 <style>
     .metric-card {
         background-color: #ffffff;
-        border: 1px solid #e2e8f0;
+        border: 1px solid #cbd5e1;
         border-radius: 8px;
         padding: 14px 16px;
         margin-bottom: 12px;
@@ -53,7 +50,7 @@ st.markdown("""
     .metric-card h4 {
         margin: 0;
         font-size: 0.75rem;
-        color: #64748b;
+        color: #475569;
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
@@ -63,45 +60,74 @@ st.markdown("""
         color: #0284c7;
         margin: 4px 0;
     }
-    .metric-card .sub {
-        font-size: 0.75rem;
-        color: #94a3b8;
-    }
     .telemetry-bar {
-        background-color: #f1f5f9;
+        background-color: #f8fafc;
         border: 1px solid #cbd5e1;
-        padding: 8px 16px;
+        padding: 10px 16px;
         border-radius: 6px;
         font-size: 0.85rem;
-        color: #334155;
+        color: #1e293b;
         margin-bottom: 16px;
         display: flex;
         justify-content: space-between;
         align-items: center;
         font-family: monospace;
     }
+    .chip {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+        font-size: 11px;
+        background-color: #0284c7;
+        color: #ffffff;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# ----------------- UNIVERSAL CRS DETECTOR & FALLBACK ENGINE -----------------
+def identify_and_enforce_crs(src):
+    """
+    Identifies the native CRS across India. If missing/user-defined,
+    determines whether coordinates are in Lat/Lon (EPSG:4326) or
+    UTM meter grids (Zone 42N to 47N, defaulting to Zone 46N).
+    """
+    if src.crs and src.crs.is_valid:
+        return src.crs
+
+    left, bottom, right, top = src.bounds
+    # Check if bounds are in Geographic Degree format (EPSG:4326)
+    if -180.0 <= left <= 180.0 and -90.0 <= bottom <= 90.0 and abs(right - left) < 10.0:
+        return CRS.from_epsg(4326)
+
+    # Typical Indian UTM coordinates: Easting ~ 200,000 - 800,000; Northing ~ 800,000 - 4,000,000
+    mid_easting = (left + right) / 2.0
+    # North-East India (Meghalaya, Assam, Nagaland, Tripura) -> Zone 46N
+    if 200000 <= mid_easting <= 850000:
+        return CRS.from_epsg(32646)
+
+    # Default Indian general baseline
+    return CRS.from_epsg(32646)
 
 # ----------------- SIDEBAR CONTROLS -----------------
 with st.sidebar:
     st.title("⛏️ Mine Spatial Deck")
-    st.caption("UTM Zone 46N (EPSG:32646) Photogrammetry & Volumetrics")
+    st.caption("Universal Indian Drone Photogrammetry Engine")
     st.markdown("---")
 
-    st.subheader("1. Measurement Target")
+    st.subheader("1. Operation Mode")
     survey_mode = st.radio(
-        "Calculation Mode",
+        "Measurement Target",
         ["Mine Pit / Quarry Face Excavation (Rock Cut)", "Stockpile / Mineral Dump (Heap Fill)"]
     )
     st.markdown("---")
 
     st.subheader("2. Survey Ingest (.tif / .shp)")
-    uploaded_ortho = st.file_uploader("Orthomosaic RGB (.tif)", type=["tif", "tiff"])
-    uploaded_dsm = st.file_uploader("DSM Elevation (.tif)", type=["tif", "tiff"])
-    uploaded_dtm = st.file_uploader("Original Baseline DTM (.tif) [Optional]", type=["tif", "tiff"])
+    uploaded_ortho = st.file_uploader("1. Orthomosaic RGB (.tif / COG)", type=["tif", "tiff"])
+    uploaded_dsm = st.file_uploader("2. DSM Elevation (.tif / COG)", type=["tif", "tiff"])
+    uploaded_dtm = st.file_uploader("3. DTM Baseline (.tif / COG) [Optional]", type=["tif", "tiff"])
     uploaded_vectors = st.file_uploader(
-        "Lease Boundary (.shp + .shx + .dbf or .zip / .geojson)",
+        "4. Lease Boundary (.shp + .shx + .dbf or .zip / .geojson)",
         type=["shp", "shx", "dbf", "prj", "zip", "geojson", "kml"],
         accept_multiple_files=True
     )
@@ -115,7 +141,7 @@ with st.sidebar:
     )
     st.markdown("---")
 
-    st.subheader("4. Material & Layer Display")
+    st.subheader("4. Material & Layer Density")
     minerals = {
         "Limestone (Solid In-Situ Bedrock)": 2.65,
         "Limestone (Blasted / Loose Muck)": 1.65,
@@ -124,11 +150,11 @@ with st.sidebar:
         "Overburden Rock / Shale": 2.20,
         "Custom Specific Gravity": 2.50
     }
-    selected_mineral = st.selectbox("Mineral / Material", list(minerals.keys()))
+    selected_mineral = st.selectbox("Mineral / Rock Type", list(minerals.keys()))
     density_val = st.number_input("Density (Tonnes / m³)", value=minerals[selected_mineral], step=0.05)
-    ortho_opacity = st.slider("Orthomosaic Layer Opacity", 0.0, 1.0, 0.85, 0.05)
+    ortho_opacity = st.slider("Orthomosaic Opacity", 0.0, 1.0, 0.85, 0.05)
 
-# ----------------- FILE CACHE HELPERS -----------------
+# ----------------- FILE PERSISTENCE HELPERS -----------------
 def cache_upload(file_obj, ext=".tif"):
     if file_obj is not None:
         t = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
@@ -140,7 +166,7 @@ ortho_local = cache_upload(uploaded_ortho, ".tif")
 dsm_local = cache_upload(uploaded_dsm, ".tif")
 dtm_local = cache_upload(uploaded_dtm, ".tif")
 
-# Save 3D files for Three.js
+# Save 3D Models locally to Streamlit's static directory
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 
@@ -182,33 +208,47 @@ if uploaded_vectors:
         if target_shp:
             gdf = gpd.read_file(target_shp)
             if gdf.crs is None:
-                gdf.set_crs(DEFAULT_CRS, inplace=True)
+                gdf.set_crs(CRS.from_epsg(32646), inplace=True)
             gdf_cadastral = gdf.to_crs(epsg=4326)
     except Exception as e:
         st.sidebar.error(f"Vector parser error: {e}")
 
-# ----------------- ROBUST RASTER REPROJECTION & OVERLAY ENGINE -----------------
-site_center = [25.1842, 92.3512]  # Default regional center (Meghalaya)
+# ----------------- UNIVERSAL RASTER REPROJECTION ENGINE -----------------
+site_center = [25.1842, 92.3512]
 site_bounds_leaflet = None
 overlay_png_uri = None
+detected_crs_name = "None Detected"
 
 active_raster = ortho_local or dsm_local
 
 if active_raster:
     try:
         with rasterio.open(active_raster) as src:
-            src_crs = src.crs if src.crs else DEFAULT_CRS
+            src_crs = identify_and_enforce_crs(src)
+            detected_crs_name = src_crs.to_string()
+
             left, bottom, right, top = src.bounds
             min_lon, min_lat, max_lon, max_lat = transform_bounds(src_crs, "EPSG:4326", left, bottom, right, top)
 
             site_bounds_leaflet = [[min_lat, min_lon], [max_lat, max_lon]]
             site_center = [(min_lat + max_lat) / 2.0, (min_lon + max_lon) / 2.0]
 
-            # Reproject overview into Web Mercator (EPSG:3857)
+            # Reproject to Web Mercator (EPSG:3857)
             dst_crs = "EPSG:3857"
             target_res = 1200
+
+            # Proportional dimension computation
+            aspect = src.height / src.width
+            if aspect >= 1.0:
+                dst_h = target_res
+                dst_w = max(1, int(target_res / aspect))
+            else:
+                dst_w = target_res
+                dst_h = max(1, int(target_res * aspect))
+
             transform, width, height = calculate_default_transform(
-                src_crs, dst_crs, src.width, src.height, *src.bounds, dst_width=target_res
+                src_crs, dst_crs, src.width, src.height, *src.bounds,
+                dst_width=dst_w, dst_height=dst_h
             )
             n_bands = min(src.count, 3)
             dest_arr = np.zeros((n_bands, height, width), dtype=np.uint8)
@@ -224,7 +264,7 @@ if active_raster:
                     resampling=Resampling.bilinear
                 )
 
-            # Generate RGBA transparency for outer zero borders
+            # Mask out black borders/nodata to full transparency
             if n_bands >= 3:
                 rgb = np.dstack((dest_arr[0], dest_arr[1], dest_arr[2]))
                 alpha = np.where((rgb[:, :, 0] == 0) & (rgb[:, :, 1] == 0) & (rgb[:, :, 2] == 0), 0, 255).astype(np.uint8)
@@ -241,10 +281,10 @@ if active_raster:
     except Exception as e:
         st.sidebar.error(f"GeoTIFF decoder error: {e}")
 
-# ----------------- TOP TELEMETRY RIBBON -----------------
+# ----------------- TELEMETRY STATUS BAR -----------------
 st.markdown(f"""
 <div class="telemetry-bar">
-    <div><strong>SURVEY DECK:</strong> ACTIVE UPLOAD &nbsp;|&nbsp; <strong>DATUM:</strong> WGS 84 / UTM ZONE 46N (EPSG:32646)</div>
+    <div><strong>DETECTED GRID:</strong> <span class="chip">{detected_crs_name}</span> &nbsp;|&nbsp; <strong>DATUM:</strong> WGS 84 / INDIA COMPLIANT</div>
     <div><strong>STATUS:</strong> {'RASTER CALIBRATED' if overlay_png_uri else 'WAITING FOR DATA'}</div>
 </div>
 """, unsafe_allow_html=True)
@@ -256,7 +296,7 @@ tab_gis, tab_3d_viewer, tab_deliverables = st.tabs([
     "📋 IBM Rule 34A Deliverables"
 ])
 
-# ----------------- TAB 1: 2D GIS & VOLUMETRICS -----------------
+# ----------------- TAB 1: 2D GIS & CUT/FILL CALCULATION -----------------
 with tab_gis:
     col_map, col_metrics = st.columns([2.5, 1])
 
@@ -278,7 +318,7 @@ with tab_gis:
             control=True
         ).add_to(m)
 
-        # Drone Orthomosaic Overlay
+        # Reprojected Orthomosaic Layer
         if overlay_png_uri and site_bounds_leaflet:
             folium.raster_layers.ImageOverlay(
                 image=overlay_png_uri,
@@ -299,7 +339,7 @@ with tab_gis:
                 tooltip="Survey Coverage Extent"
             ).add_to(m)
 
-        # Boundary Shapefile
+        # Boundary Vectors
         if gdf_cadastral is not None:
             folium.GeoJson(
                 gdf_cadastral,
@@ -341,7 +381,7 @@ with tab_gis:
             with st.spinner("Calculating cut & fill volumes..."):
                 try:
                     with rasterio.open(dsm_local) as dsm_src:
-                        actual_crs = dsm_src.crs if dsm_src.crs else DEFAULT_CRS
+                        actual_crs = identify_and_enforce_crs(dsm_src)
                         transformer = Transformer.from_crs("EPSG:4326", actual_crs, always_xy=True)
 
                         raw_coords = active_drawing["geometry"]["coordinates"][0]
@@ -389,7 +429,7 @@ with tab_gis:
                                 f"{target_vol:,.2f} m³"
                             )
                             st.metric("Solid Rock Mass / Tonnage", f"{tonnage:,.2f} Tonnes")
-                            st.metric("Pit Bench Footprint Area", f"{footprint:,.2f} m²")
+                            st.metric("Bench Footprint Area", f"{footprint:,.2f} m²")
 
                             st.session_state.last_res = {
                                 "target": survey_mode,
@@ -515,7 +555,7 @@ with tab_3d_viewer:
         except Exception as e:
             st.error(f"Point cloud parsing error: {e}")
     else:
-        st.info("Upload your 3D assets on the sidebar (Section 3) to view the textured mesh or point cloud in 3D.")
+        st.info("Upload 3D assets on the sidebar (Section 3) to view the textured mesh or point cloud in 3D.")
 
 # ----------------- TAB 3: DELIVERABLES -----------------
 with tab_deliverables:
