@@ -2,3 +2,13 @@
 maxUploadSize = 1024
 maxMessageSize = 1024
 enableStaticServing = true
+enableCORS = false
+enableXsrfProtection = false
+
+[theme]
+base = "light"
+primaryColor = "#0284c7"
+backgroundColor = "#f8fafc"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#0f172a"
+font = "sans serif"
