@@ -1,8 +1,0 @@
-{
-  "name": "MINING_DRONE_OS - Unified Web-GIS & Drone Operations",
-  "description": "Unified Web-GIS and drone operations platform for mining: split-surface viewer (Ortho, DSM, DTM), contour elevation modeling, live shapefile digitization, 1GB upload, and Google Drive & DXF/KML/GeoJSON export.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}
