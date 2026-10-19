@@ -1,65 +1,26 @@
-"""
-MINING_DRONE_OS v3.0 - Unified Web-GIS & Mining Operations Core
-Streamlit Production Edition for Opencast Mining Topography,
-UTM 46N COG / Orthomosaic Ingestion, DSM Excavation Cut & Fill, 3D Mesh & Client Deliverables.
-"""
-
 import os
 import json
-import io
-import math
 import base64
 import tempfile
 import zipfile
 from datetime import datetime
+from io import BytesIO
 import numpy as np
 import pandas as pd
 from PIL import Image
 
 import streamlit as st
 import folium
-from folium import plugins
 from folium.plugins import Draw, MeasureControl, Fullscreen
+from streamlit_folium import st_folium
 
-# Optional / External GIS Libs with safe graceful fallbacks
-try:
-    from streamlit_folium import st_folium
-    HAS_ST_FOLIUM = True
-except ImportError:
-    HAS_ST_FOLIUM = False
-
-try:
-    import plotly.graph_objects as go
-    HAS_PLOTLY = True
-except ImportError:
-    HAS_PLOTLY = False
-
-try:
-    import rasterio
-    from rasterio.mask import mask as raster_mask
-    from rasterio.warp import transform_bounds, calculate_default_transform, reproject, Resampling
-    from rasterio.crs import CRS
-    HAS_RASTERIO = True
-except ImportError:
-    HAS_RASTERIO = False
-
-try:
-    from pyproj import Transformer
-    HAS_PYPROJ = True
-except ImportError:
-    HAS_PYPROJ = False
-
-try:
-    from shapely.geometry import Polygon as ShapelyPolygon
-    HAS_SHAPELY = True
-except ImportError:
-    HAS_SHAPELY = False
-
-try:
-    import geopandas as gpd
-    HAS_GEOPANDAS = True
-except ImportError:
-    HAS_GEOPANDAS = False
+import rasterio
+from rasterio.mask import mask as raster_mask
+from rasterio.warp import transform_bounds, calculate_default_transform, reproject, Resampling
+from rasterio.crs import CRS
+from pyproj import Transformer
+from shapely.geometry import Polygon as ShapelyPolygon
+import geopandas as gpd
 
 try:
     import laspy
@@ -67,212 +28,107 @@ try:
 except ImportError:
     HAS_LASPY = False
 
-# Default Coordinate Reference System: WGS 84 / UTM Zone 46N (North-East India Mining Belt)
-DEFAULT_CRS_CODE = "EPSG:32646"
+# Default Coordinate System: WGS 84 / UTM Zone 46N
+DEFAULT_CRS = CRS.from_epsg(32646)
 
-# =====================================================================
-# EMBEDDED GIS ENGINE & PRESET DEFINITIONS
-# =====================================================================
-
-SITE_PRESETS = {
-    "umtyra_limestone": {
-        "id": "umtyra_limestone",
-        "name": "Umtyra GSCL Limestone Mine",
-        "center": [25.1842, 92.3512],
-        "bounds": [[25.1780, 92.3440], [25.1900, 92.3590]],
-        "utm_zone": "WGS 84 / UTM Zone 46N (EPSG:32646)",
-        "uav_platform": "DJI Matrice 350 RTK / M3E",
-        "gsd_cm": 3.8,
-        "total_area_ha": 6.78,
-        "base_elevation_m": 680.0,
-        "pit_floor_elevation_m": 612.0,
-        "initial_features": [
-            {
-                "id": "feat_01",
-                "name": "Active Pit Bench #01",
-                "type": "Pit Face",
-                "category": "excavation",
-                "color": "#4cd7f6",
-                "density": 2.65,
-                "coordinates": [
-                    [25.1855, 92.3480],
-                    [25.1870, 92.3530],
-                    [25.1830, 92.3540],
-                    [25.1820, 92.3490]
-                ]
-            }
-        ]
-    },
-    "cerro_verde": {
-        "id": "cerro_verde",
-        "name": "Cerro Verde Copper Pit",
-        "center": [-16.5365, -71.5833],
-        "bounds": [[-16.5450, -71.5950], [-16.5280, -71.5720]],
-        "utm_zone": "WGS 84 / UTM Zone 19S (EPSG:32719)",
-        "uav_platform": "VTOL PPK Mapping UAV",
-        "gsd_cm": 4.5,
-        "total_area_ha": 184.2,
-        "base_elevation_m": 2720.0,
-        "pit_floor_elevation_m": 2340.0,
-        "initial_features": []
-    }
-}
-
-# =====================================================================
-# STREAMLIT PAGE CONFIGURATION & THEME
-# =====================================================================
-
+# ----------------- STREAMLIT PAGE CONFIG -----------------
 st.set_page_config(
-    page_title="MINING_DRONE_OS v3.0 - Unified Web-GIS",
+    page_title="Mine Site Spatial Deck & Volumetrics",
     page_icon="⛏️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# Clean, professional, high-contrast dashboard styling
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@500;700;800&family=Space+Grotesk:wght@600;700&display=swap');
-    
-    html, body, [class*="css"], .stMarkdown, .stText {
-        font-family: 'JetBrains Mono', monospace;
-    }
-    
-    .stApp {
-        background-color: #090d0a !important;
-        color: #e6ede6 !important;
-    }
-    
-    section[data-testid="stSidebar"] {
-        background-color: #101712 !important;
-        border-right: 1px solid #1f2d22 !important;
-    }
-    
     .metric-card {
-        background-color: #141b16;
-        border: 1px solid #233125;
-        border-radius: 6px;
-        padding: 12px 14px;
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 14px 16px;
         margin-bottom: 12px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
-    
-    .telemetry-ticker {
-        background: linear-gradient(90deg, #0d140f 0%, #121c15 100%);
-        border: 1px solid #233125;
-        border-left: 3px solid #c6ff00;
-        padding: 8px 14px;
-        font-size: 11px;
-        color: #c6ff00;
-        margin-bottom: 14px;
-        border-radius: 4px;
+    .metric-card h4 {
+        margin: 0;
+        font-size: 0.75rem;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .metric-card .val {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #0284c7;
+        margin: 4px 0;
+    }
+    .metric-card .sub {
+        font-size: 0.75rem;
+        color: #94a3b8;
+    }
+    .telemetry-bar {
+        background-color: #f1f5f9;
+        border: 1px solid #cbd5e1;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: #334155;
+        margin-bottom: 16px;
         display: flex;
         justify-content: space-between;
         align-items: center;
-        letter-spacing: 0.3px;
-    }
-    
-    .badge-rtk {
-        background-color: rgba(198, 255, 0, 0.15);
-        color: #c6ff00;
-        border: 1px solid #c6ff00;
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-weight: 700;
-        font-size: 9px;
-    }
-
-    .stButton>button {
-        background-color: #c6ff00 !important;
-        color: #000000 !important;
-        font-weight: 700 !important;
-        font-family: 'Plus Jakarta Sans', sans-serif !important;
-        border: none !important;
-        border-radius: 4px !important;
-        width: 100% !important;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background-color: #17221a !important;
-        color: #c6ff00 !important;
-        border-bottom: 2px solid #c6ff00 !important;
+        font-family: monospace;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# =====================================================================
-# SESSION STATE INITIALIZATION
-# =====================================================================
-
-if "active_site_id" not in st.session_state:
-    st.session_state.active_site_id = "umtyra_limestone"
-
-if "digitized_features" not in st.session_state:
-    st.session_state.digitized_features = list(SITE_PRESETS["umtyra_limestone"]["initial_features"])
-
-if "last_volume_res" not in st.session_state:
-    st.session_state.last_volume_res = None
-
-# =====================================================================
-# SIDEBAR CONTROLS
-# =====================================================================
-
+# ----------------- SIDEBAR CONTROLS -----------------
 with st.sidebar:
-    st.markdown("""
-    <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
-        <span style="font-size:24px;">⛏️</span>
-        <div>
-            <div style="font-weight:800; font-size:16px; color:#ffffff; font-family:'Plus Jakarta Sans',sans-serif;">MINING_DRONE_OS</div>
-            <div style="font-size:10px; color:#829485;">v3.0 PRO · Unified Web-GIS Core</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.divider()
+    st.title("⛏️ Mine Spatial Deck")
+    st.caption("UTM Zone 46N (EPSG:32646) Photogrammetry & Volumetrics")
+    st.markdown("---")
 
-    # 1. Mining Concession Presets
-    site_names = {v["name"]: k for k, v in SITE_PRESETS.items()}
-    chosen_label = st.selectbox("🗺️ Active Concession", list(site_names.keys()), index=0)
-    selected_site_id = site_names[chosen_label]
-
-    if selected_site_id != st.session_state.active_site_id:
-        st.session_state.active_site_id = selected_site_id
-        st.session_state.digitized_features = list(SITE_PRESETS[selected_site_id]["initial_features"])
-        st.rerun()
-
-    site = SITE_PRESETS[st.session_state.active_site_id]
-    st.divider()
-
-    # 2. Mode Selector
-    calc_target = st.radio(
-        "⚡ Volumetric Calculation Mode",
-        ["Mine Pit / Bench Excavation (Rock Cut)", "Stockpile / Mineral Dump (Heap Fill)"]
+    st.subheader("1. Measurement Target")
+    survey_mode = st.radio(
+        "Calculation Mode",
+        ["Mine Pit / Quarry Face Excavation (Rock Cut)", "Stockpile / Mineral Dump (Heap Fill)"]
     )
-    st.divider()
+    st.markdown("---")
 
-    # 3. Layer Visibility Controls
-    st.subheader("🗺️ Layer Stack Controls")
-    show_google_hybrid = st.checkbox("Google Hybrid Satellite Base", value=True)
-    show_ortho_layer = st.checkbox("High-Res Drone Ortho Layer", value=True)
-    show_boundary_shp = st.checkbox("Lease Boundary Vector (.shp)", value=True)
-    ortho_opacity = st.slider("Orthomosaic Opacity", 0.0, 1.0, 0.85, 0.05)
-    st.divider()
-
-    # 4. Ingestion Pipeline
-    st.subheader("📁 Ingest Survey Rasters & Vectors")
-    uploaded_ortho = st.file_uploader("1. Orthomosaic (.tif / COG)", type=["tif", "tiff"])
-    uploaded_dsm = st.file_uploader("2. DSM Elevation (.tif)", type=["tif", "tiff"])
-    uploaded_dtm = st.file_uploader("3. DTM Baseline (.tif) [Optional]", type=["tif", "tiff"])
+    st.subheader("2. Survey Ingest (.tif / .shp)")
+    uploaded_ortho = st.file_uploader("Orthomosaic RGB (.tif)", type=["tif", "tiff"])
+    uploaded_dsm = st.file_uploader("DSM Elevation (.tif)", type=["tif", "tiff"])
+    uploaded_dtm = st.file_uploader("Original Baseline DTM (.tif) [Optional]", type=["tif", "tiff"])
     uploaded_vectors = st.file_uploader(
-        "4. Lease Boundary (.shp + .shx + .dbf or .zip / .geojson)",
+        "Lease Boundary (.shp + .shx + .dbf or .zip / .geojson)",
         type=["shp", "shx", "dbf", "prj", "zip", "geojson", "kml"],
         accept_multiple_files=True
     )
+    st.markdown("---")
+
+    st.subheader("3. 3D Model / Point Cloud")
     uploaded_3d = st.file_uploader(
-        "5. 3D Model / Point Cloud (.obj+.mtl+.jpg or .las/.laz)",
+        "Upload 3D Asset (.obj + .mtl + .jpg or .las / .laz)",
         type=["obj", "mtl", "jpg", "jpeg", "png", "las", "laz"],
         accept_multiple_files=True
     )
+    st.markdown("---")
 
-# ----------------- INGESTION PROCESSING HELPERS -----------------
+    st.subheader("4. Material & Layer Display")
+    minerals = {
+        "Limestone (Solid In-Situ Bedrock)": 2.65,
+        "Limestone (Blasted / Loose Muck)": 1.65,
+        "Coal (Bituminous Bedrock)": 1.35,
+        "Iron Ore (Hematite Solid Rock)": 3.80,
+        "Overburden Rock / Shale": 2.20,
+        "Custom Specific Gravity": 2.50
+    }
+    selected_mineral = st.selectbox("Mineral / Material", list(minerals.keys()))
+    density_val = st.number_input("Density (Tonnes / m³)", value=minerals[selected_mineral], step=0.05)
+    ortho_opacity = st.slider("Orthomosaic Layer Opacity", 0.0, 1.0, 0.85, 0.05)
+
+# ----------------- FILE CACHE HELPERS -----------------
 def cache_upload(file_obj, ext=".tif"):
     if file_obj is not None:
         t = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
@@ -284,7 +140,7 @@ ortho_local = cache_upload(uploaded_ortho, ".tif")
 dsm_local = cache_upload(uploaded_dsm, ".tif")
 dtm_local = cache_upload(uploaded_dtm, ".tif")
 
-# Parse 3D Assets
+# Save 3D files for Three.js
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 
@@ -323,35 +179,32 @@ if uploaded_vectors:
                 if z_shps:
                     target_shp = os.path.join(temp_vdir, z_shps[0])
 
-        if target_shp and HAS_GEOPANDAS:
+        if target_shp:
             gdf = gpd.read_file(target_shp)
-            if gdf.crs is None and HAS_RASTERIO:
-                gdf.set_crs(CRS.from_epsg(32646), inplace=True)
+            if gdf.crs is None:
+                gdf.set_crs(DEFAULT_CRS, inplace=True)
             gdf_cadastral = gdf.to_crs(epsg=4326)
     except Exception as e:
         st.sidebar.error(f"Vector parser error: {e}")
 
-# =====================================================================
-# RASTER REPROJECTION & WEB MERCATOR OVERLAY ENGINE
-# =====================================================================
-
-site_center = site["center"]
-site_bounds_leaflet = site["bounds"]
+# ----------------- ROBUST RASTER REPROJECTION & OVERLAY ENGINE -----------------
+site_center = [25.1842, 92.3512]  # Default regional center (Meghalaya)
+site_bounds_leaflet = None
 overlay_png_uri = None
 
 active_raster = ortho_local or dsm_local
 
-if active_raster and HAS_RASTERIO:
+if active_raster:
     try:
         with rasterio.open(active_raster) as src:
-            src_crs = src.crs if src.crs else CRS.from_epsg(32646)
+            src_crs = src.crs if src.crs else DEFAULT_CRS
             left, bottom, right, top = src.bounds
             min_lon, min_lat, max_lon, max_lat = transform_bounds(src_crs, "EPSG:4326", left, bottom, right, top)
-            
+
             site_bounds_leaflet = [[min_lat, min_lon], [max_lat, max_lon]]
             site_center = [(min_lat + max_lat) / 2.0, (min_lon + max_lon) / 2.0]
 
-            # Reproject Overview to Web Mercator (EPSG:3857) with alpha channel
+            # Reproject overview into Web Mercator (EPSG:3857)
             dst_crs = "EPSG:3857"
             target_res = 1200
             transform, width, height = calculate_default_transform(
@@ -371,6 +224,7 @@ if active_raster and HAS_RASTERIO:
                     resampling=Resampling.bilinear
                 )
 
+            # Generate RGBA transparency for outer zero borders
             if n_bands >= 3:
                 rgb = np.dstack((dest_arr[0], dest_arr[1], dest_arr[2]))
                 alpha = np.where((rgb[:, :, 0] == 0) & (rgb[:, :, 1] == 0) & (rgb[:, :, 2] == 0), 0, 255).astype(np.uint8)
@@ -385,63 +239,47 @@ if active_raster and HAS_RASTERIO:
             pil_img.save(buf, format="PNG")
             overlay_png_uri = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
     except Exception as e:
-        st.sidebar.error(f"Raster engine error: {e}")
+        st.sidebar.error(f"GeoTIFF decoder error: {e}")
 
-# =====================================================================
-# TOP TELEMETRY RIBBON
-# =====================================================================
-
+# ----------------- TOP TELEMETRY RIBBON -----------------
 st.markdown(f"""
-<div class="telemetry-ticker">
-    <div>
-        <strong>• LIVE SURVEY SESSION</strong> &nbsp;|&nbsp; 
-        <span>{site['name'].upper()}</span> &nbsp;|&nbsp; 
-        <span style="color:#00e5ff;">PLATFORM: {site['uav_platform']}</span> &nbsp;|&nbsp; 
-        <span>GSD: {site['gsd_cm']} CM/PX</span>
-    </div>
-    <div style="display:flex; align-items:center; gap:12px;">
-        <span>GRID: {site['utm_zone']}</span>
-        <span class="badge-rtk">RTK FIXED</span>
-        <span style="color:#c6ff00;">READY</span>
-    </div>
+<div class="telemetry-bar">
+    <div><strong>SURVEY DECK:</strong> ACTIVE UPLOAD &nbsp;|&nbsp; <strong>DATUM:</strong> WGS 84 / UTM ZONE 46N (EPSG:32646)</div>
+    <div><strong>STATUS:</strong> {'RASTER CALIBRATED' if overlay_png_uri else 'WAITING FOR DATA'}</div>
 </div>
 """, unsafe_allow_html=True)
 
-# =====================================================================
-# MAIN WORKSPACE & MODULE TABS
-# =====================================================================
-
+# ----------------- WORKSPACE TABS -----------------
 tab_gis, tab_3d_viewer, tab_deliverables = st.tabs([
     "🗺️ Spatial GIS & Volumetric Deck",
     "☁️ 3D Model / Point Cloud Deck",
     "📋 IBM Rule 34A Deliverables"
 ])
 
-# ----------------- TAB 1: 2D GIS & CUT/FILL CALCULATION -----------------
+# ----------------- TAB 1: 2D GIS & VOLUMETRICS -----------------
 with tab_gis:
     col_map, col_metrics = st.columns([2.5, 1])
 
     with col_map:
         m = folium.Map(
             location=site_center,
-            zoom_start=16 if active_raster else 15,
+            zoom_start=16 if site_bounds_leaflet else 14,
             max_zoom=22,
             tiles=None,
             control_scale=True
         )
 
-        if show_google_hybrid:
-            folium.TileLayer(
-                tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
-                attr="Google Satellite Hybrid",
-                name="Google Hybrid",
-                max_zoom=22,
-                overlay=False,
-                control=True
-            ).add_to(m)
+        folium.TileLayer(
+            tiles="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+            attr="Google Satellite Hybrid",
+            name="Google Hybrid Satellite",
+            max_zoom=22,
+            overlay=False,
+            control=True
+        ).add_to(m)
 
-        # Reprojected Orthomosaic Layer
-        if show_ortho_layer and overlay_png_uri:
+        # Drone Orthomosaic Overlay
+        if overlay_png_uri and site_bounds_leaflet:
             folium.raster_layers.ImageOverlay(
                 image=overlay_png_uri,
                 bounds=site_bounds_leaflet,
@@ -452,34 +290,30 @@ with tab_gis:
                 zindex=2
             ).add_to(m)
 
-        # Survey Bound Rectangle
-        if site_bounds_leaflet:
             folium.Rectangle(
                 bounds=site_bounds_leaflet,
-                color="#c6ff00",
+                color="#0284c7",
                 weight=2,
                 dash_array="5, 5",
                 fill=False,
-                tooltip="Survey Boundary Extent"
+                tooltip="Survey Coverage Extent"
             ).add_to(m)
 
-        # Cadastral / Lease boundary
-        if show_boundary_shp and gdf_cadastral is not None:
+        # Boundary Shapefile
+        if gdf_cadastral is not None:
             folium.GeoJson(
                 gdf_cadastral,
-                name="Leasehold Boundary (.shp)",
+                name="Lease Boundary (.shp)",
                 style_function=lambda x: {
-                    'color': '#ff4d4d',
+                    'color': '#ef4444',
                     'weight': 3,
-                    'fillColor': '#ff9100',
+                    'fillColor': '#f59e0b',
                     'fillOpacity': 0.15
                 }
             ).add_to(m)
 
-        # Draw Controls
         Draw(
             export=False,
-            filename='mine_features.geojson',
             position='topleft',
             draw_options={
                 'polyline': False,
@@ -495,25 +329,21 @@ with tab_gis:
         MeasureControl(position='bottomleft').add_to(m)
         folium.LayerControl(position='topright').add_to(m)
 
-        if HAS_ST_FOLIUM:
-            map_data = st_folium(m, width="100%", height=660, returned_objects=["last_active_drawing"])
-        else:
-            st.warning("Install `streamlit-folium` to enable interactive drawing.")
-            map_data = {}
+        map_data = st_folium(m, width="100%", height=660, returned_objects=["last_active_drawing"])
 
     with col_metrics:
-        st.markdown("### 🧮 Volumetric Analytics")
+        st.subheader("Volumetric Analytics")
         active_drawing = map_data.get("last_active_drawing") if map_data else None
 
         if not dsm_local:
-            st.info("Upload your DSM (.tif) in the sidebar to run cut/fill integration.")
+            st.info("Upload your DSM (.tif) in the sidebar to calculate excavation or stockpile volumes.")
         elif active_drawing and active_drawing.get("geometry"):
-            with st.spinner("Executing cell integration in UTM 46N..."):
+            with st.spinner("Calculating cut & fill volumes..."):
                 try:
                     with rasterio.open(dsm_local) as dsm_src:
-                        actual_crs = dsm_src.crs if dsm_src.crs else CRS.from_epsg(32646)
+                        actual_crs = dsm_src.crs if dsm_src.crs else DEFAULT_CRS
                         transformer = Transformer.from_crs("EPSG:4326", actual_crs, always_xy=True)
-                        
+
                         raw_coords = active_drawing["geometry"]["coordinates"][0]
                         utm_coords = [transformer.transform(pt[0], pt[1]) for pt in raw_coords]
                         poly = ShapelyPolygon(utm_coords)
@@ -524,25 +354,22 @@ with tab_gis:
                         valid = (dsm_matrix != nodata) & (~np.isnan(dsm_matrix)) & (dsm_matrix > -100)
 
                         if not np.any(valid):
-                            st.warning("Selected boundary contains no valid elevation cells.")
+                            st.warning("Selected polygon contains no valid elevation data.")
                         else:
                             dx = abs(dsm_affine[0])
                             dy = abs(dsm_affine[4])
                             cell_area = dx * dy
 
-                            # Baseline Elevation Derivation
                             if dtm_local:
                                 with rasterio.open(dtm_local) as dtm_src:
                                     dtm_crop, _ = raster_mask(dtm_src, [poly], crop=True)
                                     dtm_mat = dtm_crop[0]
                                     base_surface = np.where((dtm_mat != (dtm_src.nodata or -9999)) & (~np.isnan(dtm_mat)), dtm_mat, np.nan)
                             else:
-                                if "Excavation" in calc_target:
-                                    # Pit Cut Mode: Baseline plane is the top natural ground rim
+                                if "Excavation" in survey_mode:
                                     rim_elev = np.nanpercentile(dsm_matrix[valid], 95)
                                     base_surface = np.full_like(dsm_matrix, rim_elev)
                                 else:
-                                    # Heap Fill Mode: Baseline plane is the lowest bottom floor
                                     floor_elev = np.nanpercentile(dsm_matrix[valid], 5)
                                     base_surface = np.full_like(dsm_matrix, floor_elev)
 
@@ -554,53 +381,50 @@ with tab_gis:
                             vol_fill = float(np.nansum(diff[fill_cells]) * cell_area)
                             footprint = float(np.count_nonzero(valid) * cell_area)
 
-                            target_vol = vol_cut if "Excavation" in calc_target else vol_fill
-                            density = 2.65
-                            tonnage = target_vol * density
+                            target_vol = vol_cut if "Excavation" in survey_mode else vol_fill
+                            tonnage = target_vol * density_val
 
-                            st.metric("Extracted Volume (Cut)" if "Excavation" in calc_target else "Stockpile Volume (Fill)", f"{target_vol:,.2f} m³")
-                            st.metric("Estimated Solid Rock Tonnage", f"{tonnage:,.2f} T")
-                            st.metric("Bench Footprint Area", f"{footprint:,.2f} m²")
+                            st.metric(
+                                "Extracted Rock Volume (Cut)" if "Excavation" in survey_mode else "Stockpile Volume (Fill)",
+                                f"{target_vol:,.2f} m³"
+                            )
+                            st.metric("Solid Rock Mass / Tonnage", f"{tonnage:,.2f} Tonnes")
+                            st.metric("Pit Bench Footprint Area", f"{footprint:,.2f} m²")
 
-                            st.session_state.last_volume_res = {
+                            st.session_state.last_res = {
+                                "target": survey_mode,
+                                "material": selected_mineral,
+                                "density": density_val,
                                 "volume": target_vol,
                                 "tonnage": tonnage,
-                                "footprint": footprint,
-                                "cut": vol_cut,
-                                "fill": vol_fill
+                                "area": footprint
                             }
                 except Exception as ex:
                     st.error(f"Computation error: {ex}")
         else:
-            st.info("Use the Polygon/Rectangle tool on the map to delineate an excavation pit or stockpile.")
+            st.info("Draw a polygon around a quarry bench or stockpile to calculate volumetrics.")
 
-# ----------------- TAB 2: 3D MODEL & POINT CLOUD DECK -----------------
+# ----------------- TAB 2: 3D MODEL & POINT CLOUD -----------------
 with tab_3d_viewer:
-    st.markdown("## ☁️ Interactive 3D Model & Point Cloud Deck")
-    st.caption("Inspect High-Resolution Photogrammetry Meshes (.obj + .mtl + .jpg) and LiDAR (.las / .laz)")
+    st.subheader("Interactive 3D Model & Point Cloud Deck")
 
     if obj_name:
-        st.success(f"Rendering 3D Textured Mesh: {obj_name}")
+        st.success(f"Rendering 3D Mesh: {obj_name}")
         html_code = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
             <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-            <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js"></script>
             <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
-            <style>
-                body {{ margin: 0; overflow: hidden; background-color: #0b0e16; }}
-                #viewport {{ width: 100vw; height: 600px; }}
-            </style>
+            <style>body {{ margin: 0; overflow: hidden; background: #0f172a; }} #viewport {{ width: 100vw; height: 600px; }}</style>
         </head>
         <body>
             <div id="viewport"></div>
             <script>
                 const container = document.getElementById('viewport');
                 const scene = new THREE.Scene();
-                scene.background = new THREE.Color(0x0b0e16);
-
+                scene.background = new THREE.Color(0x0f172a);
                 const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 10000);
                 camera.position.set(100, 150, 200);
 
@@ -617,8 +441,7 @@ with tab_3d_viewer:
                 dirLight.position.set(100, 200, 100);
                 scene.add(dirLight);
 
-                const objLoader = new THREE.OBJLoader();
-                objLoader.load("app/static/{obj_name}", (object) => {{
+                new THREE.OBJLoader().load("app/static/{obj_name}", (object) => {{
                     const box = new THREE.Box3().setFromObject(object);
                     const center = box.getCenter(new THREE.Vector3());
                     object.position.sub(center);
@@ -635,16 +458,16 @@ with tab_3d_viewer:
         </body>
         </html>
         """
-        components.html(html_code, height=620)
+        st.components.v1.html(html_code, height=620)
 
     elif laz_local and HAS_LASPY:
-        st.success(f"Loaded Drone Point Cloud: {os.path.basename(laz_local)}")
+        st.success(f"Loaded Point Cloud: {os.path.basename(laz_local)}")
         try:
             las = laspy.read(laz_local)
             pts = las.points[::max(1, len(las.points) // 100000)]
             x, y, z = np.array(pts.x), np.array(pts.y), np.array(pts.z)
             cx, cy, cz = np.median(x), np.median(y), np.median(z)
-            
+
             coords = np.empty(len(x) * 3, dtype=np.float32)
             coords[0::3] = x - cx
             coords[1::3] = z - cz
@@ -662,14 +485,14 @@ with tab_3d_viewer:
             <head>
                 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
                 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-                <style>body {{ margin: 0; overflow: hidden; background-color: #0b0e16; }} #pc-view {{ width: 100vw; height: 600px; }}</style>
+                <style>body {{ margin: 0; overflow: hidden; background: #0f172a; }} #pc {{ width: 100vw; height: 600px; }}</style>
             </head>
             <body>
-                <div id="pc-view"></div>
+                <div id="pc"></div>
                 <script>
-                    const container = document.getElementById('pc-view');
+                    const container = document.getElementById('pc');
                     const scene = new THREE.Scene();
-                    scene.background = new THREE.Color(0x0b0e16);
+                    scene.background = new THREE.Color(0x0f172a);
                     const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 5000);
                     camera.position.set(0, 100, 150);
                     const renderer = new THREE.WebGLRenderer({{ antialias: true }});
@@ -680,8 +503,7 @@ with tab_3d_viewer:
                     const geom = new THREE.BufferGeometry();
                     geom.setAttribute('position', new THREE.Float32BufferAttribute({coords.tolist()}, 3));
                     geom.setAttribute('color', new THREE.Float32BufferAttribute({colors.tolist()}, 3));
-                    const mat = new THREE.PointsMaterial({{ size: 1.8, vertexColors: true }});
-                    scene.add(new THREE.Points(geom, mat));
+                    scene.add(new THREE.Points(geom, new THREE.PointsMaterial({{ size: 1.8, vertexColors: true }})));
 
                     function anim() {{ requestAnimationFrame(anim); controls.update(); renderer.render(scene, camera); }}
                     anim();
@@ -689,33 +511,32 @@ with tab_3d_viewer:
             </body>
             </html>
             """
-            components.html(pc_html, height=620)
+            st.components.v1.html(pc_html, height=620)
         except Exception as e:
             st.error(f"Point cloud parsing error: {e}")
     else:
-        st.info("Upload 3D assets on the sidebar (Section 5): select `3DModel.obj`, `3DModel.mtl`, and `3DModel.jpg` together, or choose a `.laz` / `.las` point cloud.")
+        st.info("Upload your 3D assets on the sidebar (Section 3) to view the textured mesh or point cloud in 3D.")
 
-# ----------------- TAB 3: DELIVERABLES & REPORTS -----------------
+# ----------------- TAB 3: DELIVERABLES -----------------
 with tab_deliverables:
-    st.markdown("## 📋 Turnkey IBM Rule 34A Deliverables")
-    st.caption("Standardized submission dossier for Indian Bureau of Mines (IBM Rule 34A MCDR 2017)")
-
-    if st.session_state.last_volume_res:
-        vr = st.session_state.last_volume_res
+    st.subheader("Turnkey IBM Rule 34A Deliverables")
+    if "last_res" in st.session_state and st.session_state.last_res:
+        res = st.session_state.last_res
         dossier = pd.DataFrame([{
-            "Concession": site["name"],
-            "Grid Reference": site["utm_zone"],
-            "Excavated Volume (m3)": round(vr["volume"], 2),
-            "Extracted Tonnage (Tonnes)": round(vr["tonnage"], 2),
-            "Bench Footprint (m2)": round(vr["footprint"], 2),
-            "Survey Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "Survey Mode": res["target"],
+            "Material": res["material"],
+            "Bulk Density (T/m3)": res["density"],
+            "Footprint Area (m2)": round(res["area"], 2),
+            "Excavation/Fill Volume (m3)": round(res["volume"], 2),
+            "Estimated Tonnage (Tonnes)": round(res["tonnage"], 2),
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }])
         st.dataframe(dossier, use_container_width=True)
         st.download_button(
             label="Download Certified CSV Volumetric Dossier",
             data=dossier.to_csv(index=False).encode('utf-8'),
-            file_name=f"{site['id']}_volumetric_dossier.csv",
+            file_name="volumetric_report.csv",
             mime="text/csv"
         )
     else:
-        st.info("Execute a volumetric calculation in Tab 1 to generate the export dossier.")
+        st.info("Execute a volumetric calculation on Tab 1 to generate the report.")
