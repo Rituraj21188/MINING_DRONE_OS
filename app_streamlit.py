@@ -13,13 +13,14 @@ import streamlit as st
 import folium
 from folium.plugins import Draw, MeasureControl, Fullscreen
 from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 
 import rasterio
 from rasterio.mask import mask as raster_mask
 from rasterio.warp import transform_bounds, calculate_default_transform, reproject, Resampling
 from rasterio.crs import CRS
 from pyproj import Transformer
-from shapely.geometry import Polygon as ShapelyPolygon
+from shapely.geometry import Polygon as ShapelyPolygon, mapping
 import geopandas as gpd
 
 try:
@@ -36,7 +37,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Professional High-Contrast UI Styling
+DEFAULT_CRS = CRS.from_epsg(32646)  # Default WGS 84 / UTM Zone 46N
+
+# High-contrast, clean theme styling
 st.markdown("""
 <style>
     .metric-card {
@@ -85,29 +88,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- UNIVERSAL CRS DETECTOR & FALLBACK ENGINE -----------------
+# ----------------- UNIVERSAL CRS DETECTOR & ENFORCER -----------------
 def identify_and_enforce_crs(src):
-    """
-    Identifies the native CRS across India. If missing/user-defined,
-    determines whether coordinates are in Lat/Lon (EPSG:4326) or
-    UTM meter grids (Zone 42N to 47N, defaulting to Zone 46N).
-    """
     if src.crs and src.crs.is_valid:
         return src.crs
 
     left, bottom, right, top = src.bounds
-    # Check if bounds are in Geographic Degree format (EPSG:4326)
     if -180.0 <= left <= 180.0 and -90.0 <= bottom <= 90.0 and abs(right - left) < 10.0:
         return CRS.from_epsg(4326)
 
-    # Typical Indian UTM coordinates: Easting ~ 200,000 - 800,000; Northing ~ 800,000 - 4,000,000
-    mid_easting = (left + right) / 2.0
-    # North-East India (Meghalaya, Assam, Nagaland, Tripura) -> Zone 46N
-    if 200000 <= mid_easting <= 850000:
-        return CRS.from_epsg(32646)
-
-    # Default Indian general baseline
-    return CRS.from_epsg(32646)
+    return DEFAULT_CRS
 
 # ----------------- SIDEBAR CONTROLS -----------------
 with st.sidebar:
@@ -117,7 +107,7 @@ with st.sidebar:
 
     st.subheader("1. Operation Mode")
     survey_mode = st.radio(
-        "Measurement Target",
+        "Calculation Target",
         ["Mine Pit / Quarry Face Excavation (Rock Cut)", "Stockpile / Mineral Dump (Heap Fill)"]
     )
     st.markdown("---")
@@ -126,16 +116,18 @@ with st.sidebar:
     uploaded_ortho = st.file_uploader("1. Orthomosaic RGB (.tif / COG)", type=["tif", "tiff"])
     uploaded_dsm = st.file_uploader("2. DSM Elevation (.tif / COG)", type=["tif", "tiff"])
     uploaded_dtm = st.file_uploader("3. DTM Baseline (.tif / COG) [Optional]", type=["tif", "tiff"])
+    
+    st.caption("Upload multiple Shapefiles: Pillars (.shp), Lease Boundary (.shp), Blocks (.shp), or .zip")
     uploaded_vectors = st.file_uploader(
-        "4. Lease Boundary (.shp + .shx + .dbf or .zip / .geojson)",
+        "4. Cadastral Vector Layers",
         type=["shp", "shx", "dbf", "prj", "zip", "geojson", "kml"],
         accept_multiple_files=True
     )
     st.markdown("---")
 
-    st.subheader("3. 3D Model / Point Cloud")
+    st.subheader("3. 3D Mesh / Point Cloud")
     uploaded_3d = st.file_uploader(
-        "Upload 3D Asset (.obj + .mtl + .jpg or .las / .laz)",
+        "Upload 3D Assets (.obj + .mtl + .jpg or .las / .laz)",
         type=["obj", "mtl", "jpg", "jpeg", "png", "las", "laz"],
         accept_multiple_files=True
     )
@@ -166,7 +158,7 @@ ortho_local = cache_upload(uploaded_ortho, ".tif")
 dsm_local = cache_upload(uploaded_dsm, ".tif")
 dtm_local = cache_upload(uploaded_dtm, ".tif")
 
-# Save 3D Models locally to Streamlit's static directory
+# Save 3D assets to local static directory
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 
@@ -186,32 +178,42 @@ if uploaded_3d:
         elif n_low.endswith((".las", ".laz")):
             laz_local = save_path
 
-# Parse Vectors
-gdf_cadastral = None
+# ----------------- MULTI-LAYER VECTOR INGESTION ENGINE -----------------
+parsed_vector_layers = {}  # {layer_name: GeoDataFrame in EPSG:4326}
+polygon_extraction_options = {}  # {"LayerName - Feature #idx": ShapelyPolygon (in EPSG:4326)}
+
 if uploaded_vectors:
     try:
         temp_vdir = tempfile.mkdtemp()
-        target_shp = None
         for vfile in uploaded_vectors:
             vpath = os.path.join(temp_vdir, vfile.name)
             with open(vpath, "wb") as vf:
                 vf.write(vfile.read())
-            if vfile.name.lower().endswith((".shp", ".geojson")):
-                target_shp = vpath
-            elif vfile.name.lower().endswith(".zip"):
+            if vfile.name.lower().endswith(".zip"):
                 with zipfile.ZipFile(vpath, "r") as zr:
                     zr.extractall(temp_vdir)
-                z_shps = [f for f in os.listdir(temp_vdir) if f.endswith(".shp")]
-                if z_shps:
-                    target_shp = os.path.join(temp_vdir, z_shps[0])
 
-        if target_shp:
-            gdf = gpd.read_file(target_shp)
-            if gdf.crs is None:
-                gdf.set_crs(CRS.from_epsg(32646), inplace=True)
-            gdf_cadastral = gdf.to_crs(epsg=4326)
+        shp_candidates = [f for f in os.listdir(temp_vdir) if f.lower().endswith((".shp", ".geojson"))]
+        for shp_name in shp_candidates:
+            shp_path = os.path.join(temp_vdir, shp_name)
+            try:
+                gdf = gpd.read_file(shp_path)
+                if gdf.crs is None:
+                    gdf.set_crs(DEFAULT_CRS, inplace=True)
+                gdf_wgs84 = gdf.to_crs(epsg=4326)
+                clean_layer_name = os.path.splitext(shp_name)[0].replace("_", " ").title()
+                parsed_vector_layers[clean_layer_name] = gdf_wgs84
+
+                # Index polygon features for volume extraction
+                for idx, row in gdf_wgs84.iterrows():
+                    geom = row.geometry
+                    if geom and geom.geom_type in ["Polygon", "MultiPolygon"]:
+                        feat_label = f"{clean_layer_name} - Feature #{idx+1}"
+                        polygon_extraction_options[feat_label] = geom
+            except Exception as layer_err:
+                st.sidebar.warning(f"Could not load {shp_name}: {layer_err}")
     except Exception as e:
-        st.sidebar.error(f"Vector parser error: {e}")
+        st.sidebar.error(f"Vector parsing error: {e}")
 
 # ----------------- UNIVERSAL RASTER REPROJECTION ENGINE -----------------
 site_center = [25.1842, 92.3512]
@@ -237,7 +239,6 @@ if active_raster:
             dst_crs = "EPSG:3857"
             target_res = 1200
 
-            # Proportional dimension computation
             aspect = src.height / src.width
             if aspect >= 1.0:
                 dst_h = target_res
@@ -264,7 +265,7 @@ if active_raster:
                     resampling=Resampling.bilinear
                 )
 
-            # Mask out black borders/nodata to full transparency
+            # Mask out outer black borders/nodata to full transparency
             if n_bands >= 3:
                 rgb = np.dstack((dest_arr[0], dest_arr[1], dest_arr[2]))
                 alpha = np.where((rgb[:, :, 0] == 0) & (rgb[:, :, 1] == 0) & (rgb[:, :, 2] == 0), 0, 255).astype(np.uint8)
@@ -280,6 +281,103 @@ if active_raster:
             overlay_png_uri = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
     except Exception as e:
         st.sidebar.error(f"GeoTIFF decoder error: {e}")
+
+# ----------------- THREE.JS SURFACE TOPOGRAPHY COMPONENT -----------------
+def render_threejs_terrain(mesh_elevations, cols, rows):
+    html_bundle = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+        <style>
+            body {{ margin: 0; overflow: hidden; background-color: #0f172a; }}
+            #viewport {{ width: 100vw; height: 320px; }}
+            #hud {{
+                position: absolute; top: 8px; left: 10px;
+                background: rgba(15, 23, 42, 0.85); color: #38bdf8;
+                font-family: monospace; font-size: 10px; padding: 4px 8px;
+                border: 1px solid #334155; border-radius: 4px; pointer-events: none;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="viewport"></div>
+        <div id="hud">Left Click: Rotate | Right Click: Pan | Scroll: Zoom</div>
+        <script>
+            const container = document.getElementById('viewport');
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f172a);
+
+            const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(40, 50, 40);
+
+            const renderer = new THREE.WebGLRenderer({{ antialias: true }});
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            const controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            const ambLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambLight);
+            const dirLight = new THREE.DirectionalLight(0x38bdf8, 0.9);
+            dirLight.position.set(20, 40, 20);
+            scene.add(dirLight);
+
+            const elevData = {mesh_elevations};
+            const c = {cols};
+            const r = {rows};
+
+            const geom = new THREE.PlaneGeometry(50, 50, c - 1, r - 1);
+            geom.rotateX(-Math.PI / 2);
+
+            let minZ = Infinity, maxZ = -Infinity;
+            for(let i = 0; i < r; i++) {{
+                for(let j = 0; j < c; j++) {{
+                    const val = elevData[i][j];
+                    if(val < minZ) minZ = val;
+                    if(val > maxZ) maxZ = val;
+                }}
+            }}
+
+            const pos = geom.attributes.position;
+            let idx = 0;
+            for(let i = 0; i < r; i++) {{
+                for(let j = 0; j < c; j++) {{
+                    const z = elevData[i][j];
+                    const norm = maxZ > minZ ? (z - minZ) / (maxZ - minZ) : 0;
+                    pos.setY(idx, norm * 14);
+                    idx++;
+                }}
+            }}
+            pos.needsUpdate = true;
+            geom.computeVertexNormals();
+
+            const mat = new THREE.MeshStandardMaterial({{
+                color: 0x0284c7,
+                wireframe: false,
+                flatShading: true,
+                roughness: 0.4
+            }});
+            const mesh = new THREE.Mesh(geom, mat);
+            scene.add(mesh);
+
+            const wireMat = new THREE.MeshBasicMaterial({{ color: 0x38bdf8, wireframe: true }});
+            const wireMesh = new THREE.Mesh(geom, wireMat);
+            scene.add(wireMesh);
+
+            function loop() {{
+                requestAnimationFrame(loop);
+                controls.update();
+                renderer.render(scene, camera);
+            }}
+            loop();
+        </script>
+    </body>
+    </html>
+    """
+    components.html(html_bundle, height=330)
 
 # ----------------- TELEMETRY STATUS BAR -----------------
 st.markdown(f"""
@@ -318,7 +416,7 @@ with tab_gis:
             control=True
         ).add_to(m)
 
-        # Reprojected Orthomosaic Layer
+        # 1. Drone Orthomosaic Overlay
         if overlay_png_uri and site_bounds_leaflet:
             folium.raster_layers.ImageOverlay(
                 image=overlay_png_uri,
@@ -339,19 +437,47 @@ with tab_gis:
                 tooltip="Survey Coverage Extent"
             ).add_to(m)
 
-        # Boundary Vectors
-        if gdf_cadastral is not None:
-            folium.GeoJson(
-                gdf_cadastral,
-                name="Lease Boundary (.shp)",
-                style_function=lambda x: {
-                    'color': '#ef4444',
-                    'weight': 3,
-                    'fillColor': '#f59e0b',
-                    'fillOpacity': 0.15
-                }
-            ).add_to(m)
+        # 2. Render All Uploaded Vector Layers with Dynamic Theming
+        color_palette = ["#ef4444", "#f59e0b", "#10b981", "#8b5cf6", "#ec4899", "#06b6d4"]
+        color_idx = 0
 
+        for layer_name, gdf_wgs in parsed_vector_layers.items():
+            assigned_color = color_palette[color_idx % len(color_palette)]
+            color_idx += 1
+            geom_type = gdf_wgs.geometry.iloc[0].geom_type if len(gdf_wgs) > 0 else ""
+
+            # Point Layer: Render Boundary Pillars with Markers
+            if "Point" in geom_type:
+                for _, row in gdf_wgs.iterrows():
+                    pt = row.geometry
+                    pillar_label = row.get("name", row.get("id", row.get("Pillar_No", "Pillar")))
+                    folium.CircleMarker(
+                        location=[pt.y, pt.x],
+                        radius=5,
+                        color=assigned_color,
+                        fill=True,
+                        fill_color=assigned_color,
+                        fill_opacity=0.9,
+                        tooltip=f"{layer_name}: {pillar_label} ({pt.y:.5f}, {pt.x:.5f})"
+                    ).add_to(m)
+            else:
+                # Polygon or Polyline Layers (Lease boundary, Safety zone, Roads)
+                folium.GeoJson(
+                    gdf_wgs,
+                    name=f"{layer_name} (.shp)",
+                    style_function=lambda x, col=assigned_color: {
+                        'color': col,
+                        'weight': 3 if "Line" in geom_type else 2,
+                        'fillColor': col,
+                        'fillOpacity': 0.15 if "Polygon" in geom_type else 0.0
+                    },
+                    tooltip=folium.GeoJsonTooltip(
+                        fields=[gdf_wgs.columns[0]],
+                        aliases=[f"{layer_name}:"]
+                    ) if len(gdf_wgs.columns) > 1 else None
+                ).add_to(m)
+
+        # 3. Drawing Controls
         Draw(
             export=False,
             position='topleft',
@@ -373,36 +499,59 @@ with tab_gis:
 
     with col_metrics:
         st.subheader("Volumetric Analytics")
-        active_drawing = map_data.get("last_active_drawing") if map_data else None
+
+        # Select Boundary Source: Drawn Polygon vs Uploaded Shapefile Polygon
+        calc_source_mode = "Manual Draw on Map"
+        selected_polygon = None
+
+        if polygon_extraction_options:
+            boundary_choices = ["Manual Draw on Map"] + list(polygon_extraction_options.keys())
+            chosen_boundary = st.selectbox("Boundary Source", boundary_choices)
+            if chosen_boundary != "Manual Draw on Map":
+                selected_polygon = polygon_extraction_options[chosen_boundary]
+                calc_source_mode = "Uploaded Shapefile"
+
+        # If manual draw is chosen, pick from Leaflet map
+        if calc_source_mode == "Manual Draw on Map":
+            active_drawing = map_data.get("last_active_drawing") if map_data else None
+            if active_drawing and active_drawing.get("geometry"):
+                raw_coords = active_drawing["geometry"]["coordinates"][0]
+                selected_polygon = ShapelyPolygon(raw_coords)
 
         if not dsm_local:
             st.info("Upload your DSM (.tif) in the sidebar to calculate excavation or stockpile volumes.")
-        elif active_drawing and active_drawing.get("geometry"):
-            with st.spinner("Calculating cut & fill volumes..."):
+        elif selected_polygon is not None:
+            with st.spinner("Calculating cut & fill volumes and generating 3D terrain..."):
                 try:
                     with rasterio.open(dsm_local) as dsm_src:
                         actual_crs = identify_and_enforce_crs(dsm_src)
                         transformer = Transformer.from_crs("EPSG:4326", actual_crs, always_xy=True)
 
-                        raw_coords = active_drawing["geometry"]["coordinates"][0]
-                        utm_coords = [transformer.transform(pt[0], pt[1]) for pt in raw_coords]
-                        poly = ShapelyPolygon(utm_coords)
+                        # Reproject Shapely Polygon to Raster Native CRS
+                        if selected_polygon.geom_type == "MultiPolygon":
+                            poly_coords = list(selected_polygon.geoms[0].exterior.coords)
+                        else:
+                            poly_coords = list(selected_polygon.exterior.coords)
 
-                        dsm_crop, dsm_affine = raster_mask(dsm_src, [poly], crop=True)
+                        utm_coords = [transformer.transform(pt[0], pt[1]) for pt in poly_coords]
+                        poly_utm = ShapelyPolygon(utm_coords)
+
+                        dsm_crop, dsm_affine = raster_mask(dsm_src, [poly_utm], crop=True)
                         dsm_matrix = dsm_crop[0]
                         nodata = dsm_src.nodata or -9999
                         valid = (dsm_matrix != nodata) & (~np.isnan(dsm_matrix)) & (dsm_matrix > -100)
 
                         if not np.any(valid):
-                            st.warning("Selected polygon contains no valid elevation data.")
+                            st.warning("Selected boundary contains no valid elevation data.")
                         else:
                             dx = abs(dsm_affine[0])
                             dy = abs(dsm_affine[4])
                             cell_area = dx * dy
 
+                            # Baseline Elevation Derivation
                             if dtm_local:
                                 with rasterio.open(dtm_local) as dtm_src:
-                                    dtm_crop, _ = raster_mask(dtm_src, [poly], crop=True)
+                                    dtm_crop, _ = raster_mask(dtm_src, [poly_utm], crop=True)
                                     dtm_mat = dtm_crop[0]
                                     base_surface = np.where((dtm_mat != (dtm_src.nodata or -9999)) & (~np.isnan(dtm_mat)), dtm_mat, np.nan)
                             else:
@@ -429,7 +578,16 @@ with tab_gis:
                                 f"{target_vol:,.2f} m³"
                             )
                             st.metric("Solid Rock Mass / Tonnage", f"{tonnage:,.2f} Tonnes")
-                            st.metric("Bench Footprint Area", f"{footprint:,.2f} m²")
+                            st.metric("Pit Bench Footprint Area", f"{footprint:,.2f} m²")
+
+                            # Downsample array for Three.js Topography Mesh
+                            preview_elev = np.where(valid, dsm_matrix, np.nan)
+                            step = max(1, int(max(preview_elev.shape) / 35))
+                            mesh_sub = preview_elev[::step, ::step]
+                            mesh_sub = np.nan_to_num(mesh_sub, nan=float(np.nanmin(dsm_matrix[valid])))
+
+                            st.markdown("#### 3D Surface Topography (Three.js)")
+                            render_threejs_terrain(mesh_sub.tolist(), mesh_sub.shape[1], mesh_sub.shape[0])
 
                             st.session_state.last_res = {
                                 "target": survey_mode,
@@ -442,7 +600,7 @@ with tab_gis:
                 except Exception as ex:
                     st.error(f"Computation error: {ex}")
         else:
-            st.info("Draw a polygon around a quarry bench or stockpile to calculate volumetrics.")
+            st.info("Select an uploaded shapefile boundary or draw a polygon on the map to compute volumes.")
 
 # ----------------- TAB 2: 3D MODEL & POINT CLOUD -----------------
 with tab_3d_viewer:
